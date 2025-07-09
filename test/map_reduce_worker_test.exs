@@ -35,7 +35,7 @@ defmodule MapReduce.WorkerTest do
       job_id = Worker.execute(worker, job)
       result = Worker.get_result(worker, job_id)
 
-      assert result == 42
+      assert result == {:ok, 42}
     end
 
     test "handles job errors" do
@@ -76,7 +76,7 @@ defmodule MapReduce.WorkerTest do
           end
         end
 
-      assert Enum.all?(results, &(&1 == :shared_result))
+      assert Enum.all?(results, &(&1 == {:ok, :shared_result}))
     end
   end
 
@@ -88,7 +88,7 @@ defmodule MapReduce.WorkerTest do
 
       result = Worker.reduce(worker, jobs, associative_func)
 
-      assert result == nil
+      assert result == {:ok, nil}
     end
 
     test "reduces single job" do
@@ -98,7 +98,7 @@ defmodule MapReduce.WorkerTest do
 
       result = Worker.reduce(worker, jobs, associative_func)
 
-      assert result == 42
+      assert result == {:ok, 42}
     end
 
     test "reduces jobs with lists" do
@@ -110,11 +110,21 @@ defmodule MapReduce.WorkerTest do
         fn -> [5, 6] end
       ]
 
-      associative_func = fn a, b -> Enum.concat(b, a) end
+      associative_func = fn a, b -> Enum.concat(a, b) end
 
       result = Worker.reduce(worker, jobs, associative_func)
 
-      assert result == [1, 2, 3, 4, 5, 6]
+      assert result == {:ok, [1, 2, 3, 4, 5, 6]}
+    end
+
+    test "stop reduce on one error" do
+      worker = Worker.create()
+      jobs = [fn -> 1 end, fn -> raise "Test error" end, fn -> 3 end]
+      associative_func = fn a, b -> a + b end
+
+      result = Worker.reduce(worker, jobs, associative_func)
+
+      assert result == {:error, %RuntimeError{message: "Test error"}}
     end
   end
 
@@ -145,7 +155,7 @@ defmodule MapReduce.WorkerTest do
           end
         end
 
-      assert Enum.all?(results, fn {i, result} -> result == i * 10 end)
+      assert Enum.all?(results, fn {i, result} -> result == {:ok, i * 10} end)
     end
   end
 

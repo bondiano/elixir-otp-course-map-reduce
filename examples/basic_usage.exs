@@ -16,8 +16,8 @@ defmodule Examples.BasicUsage do
     job_id = Worker.execute(worker, simple_job)
     IO.puts("🚀  2. Started job with ID: #{inspect(job_id)}")
 
-    result = Worker.get_result(worker, job_id)
-    IO.puts("✅  3. Got result: #{result}\n")
+    {:ok, result} = Worker.get_result(worker, job_id)
+    IO.puts("✅  3. Got result: #{inspect(result)}\n")
 
     IO.puts("⚡  4. Running multiple jobs in parallel...")
     jobs = [
