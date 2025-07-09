@@ -6,17 +6,21 @@
 
 ### API
 
-1. Создавать исполнителя и прилинковывать его к вызывающему процессу
-  `create() -> worker`
+1. Создавать задачу
+  `create() -> task`
 
-2. Запускать задачку
-  `execute(worker, job) -> job_id`
+1. Запускать задачку
+  `execute(task, fn -> any() end) -> task`
 
-3. Получать результат задачки по `job_id`
-  `get_result(worker, job_id) -> result`
+2. Получать результат задачки
+  `get_result(task) -> result`
+
+3. Получать статус задачки
+  `get_status(task) -> status`
 
 4. Функция, которая позволяет запустить несколько задачек и редьюснуть их ассоциативной функцией.
-  `reduce(worker, jobs, associative_func)`
+  `reduce([fn -> any() end], fn a, b -> any() end) -> result`
+
 
 ## Installation
 
