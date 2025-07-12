@@ -19,6 +19,9 @@ defmodule MapReduce.MixProject do
 
   defp deps do
     [
+      {:poolboy, "~> 1.5"},
+      {:libring, "~> 1.0"},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.0", only: [:dev], runtime: false}
     ]
   end

@@ -3,7 +3,7 @@ defmodule MapReduce do
   MapReduce is a library for distributed task execution.
   """
 
-  alias MapReduce.{TaskManager, Task}
+  alias MapReduce.TaskManager
 
   @doc """
   Создает задачу
@@ -16,18 +16,6 @@ defmodule MapReduce do
   """
   @spec execute(Task.t(), (-> any())) :: :ok
   defdelegate execute(task, func), to: TaskManager
-
-  @doc """
-  Получает результат задачи
-  """
-  @spec get_result(Task.t()) :: {:ok, any()} | {:error, any()}
-  defdelegate get_result(task), to: TaskManager
-
-  @doc """
-  Получает статус задачи
-  """
-  @spec get_status(Task.t()) :: :pending | :running | :completed | :failed
-  defdelegate get_status(task), to: TaskManager
 
   @doc """
   Запускает несколько задач и применяет к результатам ассоциативную и коммутативную агрегатную функцию
