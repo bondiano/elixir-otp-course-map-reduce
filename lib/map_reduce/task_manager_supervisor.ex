@@ -3,8 +3,8 @@ defmodule MapReduce.TaskManagerSupervisor do
 
   use DynamicSupervisor
 
-  def start_link(init_arg) do
-    DynamicSupervisor.start_link(__MODULE__, init_arg, name: __MODULE__)
+  def start_link(_init_arg) do
+    DynamicSupervisor.start_link(__MODULE__, [], name: __MODULE__)
   end
 
   @impl true

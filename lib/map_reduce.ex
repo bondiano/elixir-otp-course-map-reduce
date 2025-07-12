@@ -12,14 +12,30 @@ defmodule MapReduce do
       when is_function(reducer_func, 2) do
     window_size = Keyword.get(opts, :window_size, 100)
     timeout = Keyword.get(opts, :timeout, 60_000)
+    stop_on_error = Keyword.get(opts, :stop_on_error, false)
 
     caller = self()
 
-    case DynamicSupervisor.start_child(
-           MapReduce.TaskManagerSupervisor,
-           {MapReduce.TaskManager, {caller, jobs, reducer_func, window_size}}
-         ) do
+    task_manager_spec = %{
+      id: MapReduce.TaskManager,
+      start:
+        {MapReduce.TaskManager, :start_link,
+         [
+           [
+             {:caller, caller},
+             {:jobs, jobs},
+             {:reducer_func, reducer_func},
+             {:window_size, window_size},
+             {:timeout, timeout},
+             {:stop_on_error, stop_on_error}
+           ]
+         ]},
+      restart: :temporary
+    }
+
+    case DynamicSupervisor.start_child(MapReduce.TaskManagerSupervisor, task_manager_spec) do
       {:ok, manager_pid} ->
+        Process.flag(:trap_exit, true)
         Process.link(manager_pid)
 
         receive do
