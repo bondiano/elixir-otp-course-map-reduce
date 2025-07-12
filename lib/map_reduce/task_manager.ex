@@ -1,113 +1,103 @@
 defmodule MapReduce.TaskManager do
   @moduledoc """
-  Менеджер для распределения задач по процессам
-  Window на старт + HashRing для распределения
+  Менеджер задач с простой логикой окон
   """
-
   use GenServer
 
-  defstruct [:hash_ring, :window_size]
+  defstruct [
+    :caller,
+    :reducer_func,
+    :window_size,
+    :waiting_jobs,
+    :active_tasks,
+    :result
+  ]
 
-  @default_window_size 100
-
-  @me __MODULE__
-
-  def start_link(opts \\ []) do
-    GenServer.start_link(@me, opts, name: @me)
-  end
-
-  def process_jobs(jobs, reducer_func) when is_list(jobs) and is_function(reducer_func, 2) do
-    GenServer.call(@me, {:process_jobs, jobs, reducer_func})
-  end
-
-  @impl true
-  def init(opts) do
-    window_size = Keyword.get(opts, :window_size, @default_window_size)
-
-    ring =
-      HashRing.new()
-      # виртуальные ноды для распределения
-      |> HashRing.add_nodes(["worker_1", "worker_2", "worker_3", "worker_4"])
-
-    {:ok, %__MODULE__{hash_ring: ring, window_size: window_size}}
+  def start_link({caller, jobs, reducer_func, window_size}) do
+    GenServer.start_link(__MODULE__, {caller, jobs, reducer_func, window_size})
   end
 
   @impl true
-  def handle_call({:process_jobs, jobs, reducer_func}, from, state) do
-    windows = create_windows(jobs, state.window_size)
+  def init({caller, jobs, reducer_func, window_size}) do
+    state = %__MODULE__{
+      caller: caller,
+      reducer_func: reducer_func,
+      window_size: window_size,
+      waiting_jobs: Enum.to_list(jobs),
+      active_tasks: %{},
+      result: nil
+    }
 
-    spawn_link(fn ->
-      result = process_windows_parallel(windows, reducer_func, state.hash_ring)
-      GenServer.reply(from, result)
-    end)
-
-    {:noreply, state}
+    {:ok, fill_window(state)}
   end
 
-  defp create_windows(jobs, window_size) do
-    Enum.chunk_every(jobs, window_size)
+  @impl true
+  def handle_info({ref, result}, state) when is_reference(ref) do
+    Process.demonitor(ref, [:flush])
+    task_finished(ref, {:ok, result}, state)
   end
 
-  defp process_windows_parallel(windows, reducer_func, hash_ring) do
-    parent = self()
-
-    window_tasks =
-      Enum.with_index(windows)
-      |> Enum.map(fn {window_jobs, index} ->
-        spawn_link(fn ->
-          results = process_window(window_jobs, hash_ring)
-          send(parent, {:window_completed, index, results})
-        end)
-      end)
-
-    window_results = collect_window_results(length(windows), %{})
-
-    all_results =
-      window_results
-      |> Map.values()
-      |> List.flatten()
-      |> Enum.filter(fn
-        {:ok, _} -> true
-        _ -> false
-      end)
-      |> Enum.map(fn {:ok, result} -> result end)
-
-    apply_reducer(all_results, reducer_func)
+  @impl true
+  def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
+    task_finished(ref, {:error, reason}, state)
   end
 
-  defp process_window(jobs, hash_ring) do
-    Enum.map(jobs, fn job ->
-      execute_job_with_routing(job, hash_ring)
-    end)
-  end
+  defp task_finished(ref, result, state) do
+    new_active_tasks = Map.delete(state.active_tasks, ref)
 
-  defp collect_window_results(0, acc), do: acc
+    new_result =
+      case result do
+        {:ok, value} ->
+          combine_result(state.result, value, state.reducer_func)
 
-  defp collect_window_results(remaining, acc) do
-    receive do
-      {:window_completed, index, results} ->
-        new_acc = Map.put(acc, index, results)
-        collect_window_results(remaining - 1, new_acc)
-    after
-      30_000 -> acc
+        {:error, _} ->
+          state.result
+      end
+
+    new_state = %__MODULE__{state | active_tasks: new_active_tasks, result: new_result}
+
+    if finished?(new_state) do
+      send(new_state.caller, {:reduce_completed, new_result})
+      {:stop, :normal, new_state}
+    else
+      final_state = fill_window(new_state)
+      {:noreply, final_state}
     end
   end
 
-  defp execute_job_with_routing(job, hash_ring) do
-    :poolboy.transaction(:map_reduce_pool, fn worker ->
-      GenServer.call(worker, {:execute, job})
+  defp fill_window(state) do
+    free_slots = state.window_size - map_size(state.active_tasks)
+    {jobs_to_run, remaining_jobs} = Enum.split(state.waiting_jobs, free_slots)
+
+    new_active_tasks =
+      Enum.reduce(jobs_to_run, state.active_tasks, fn job, acc ->
+        task = start_job_task(job)
+
+        Map.put(acc, task.ref, task)
+      end)
+
+    %__MODULE__{state | waiting_jobs: remaining_jobs, active_tasks: new_active_tasks}
+  end
+
+  defp start_job_task(job) do
+    Task.async(fn ->
+      :poolboy.transaction(:worker_pool, fn worker ->
+        GenServer.call(worker, {:execute, job})
+      end)
     end)
   end
 
-  defp apply_reducer([], _reducer_func), do: {:ok, nil}
-  defp apply_reducer([single], _reducer_func), do: {:ok, single}
+  defp finished?(state) do
+    state.waiting_jobs == [] and map_size(state.active_tasks) == 0
+  end
 
-  defp apply_reducer([first | rest], reducer_func) do
+  defp combine_result(nil, new_value, _), do: new_value
+
+  defp combine_result(current, new_value, reducer_func) do
     try do
-      result = Enum.reduce(rest, first, reducer_func)
-      {:ok, result}
+      reducer_func.(current, new_value)
     rescue
-      error -> {:error, error}
+      _ -> current
     end
   end
 end

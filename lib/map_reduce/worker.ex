@@ -6,7 +6,7 @@ defmodule MapReduce.Worker do
   use GenServer
 
   def start_link(_) do
-    GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
+    GenServer.start_link(__MODULE__, :ok)
   end
 
   @impl true
@@ -20,14 +20,10 @@ defmodule MapReduce.Worker do
       result = job.()
       {:reply, {:ok, result}, state}
     rescue
-      error ->
-        {:reply, {:error, error}, state}
+      error -> {:reply, {:error, error}, state}
     catch
-      :exit, reason ->
-        {:reply, {:error, {:exit, reason}}, state}
-
-      :throw, value ->
-        {:reply, {:error, {:throw, value}}, state}
+      :exit, reason -> {:reply, {:error, {:exit, reason}}, state}
+      :throw, value -> {:reply, {:error, {:throw, value}}, state}
     end
   end
 end

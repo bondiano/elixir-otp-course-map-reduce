@@ -3,23 +3,51 @@ defmodule MapReduce do
   MapReduce is a library for distributed task execution.
   """
 
-  alias MapReduce.TaskManager
-
-  @doc """
-  Создает задачу
-  """
-  @spec create(Keyword.t()) :: {:ok, Task.t()} | {:error, any()}
-  defdelegate create(opts \\ []), to: TaskManager
-
-  @doc """
-  Запускает задачу на исполнение
-  """
-  @spec execute(Task.t(), (-> any())) :: :ok
-  defdelegate execute(task, func), to: TaskManager
-
   @doc """
   Запускает несколько задач и применяет к результатам ассоциативную и коммутативную агрегатную функцию
   """
-  @spec reduce([(-> any())], (any(), any() -> any())) :: {:ok, any()} | {:error, any()}
-  defdelegate reduce(functions, aggregate_func), to: TaskManager
+  @spec reduce(Enum.t(), (any(), any() -> any()), Keyword.t()) ::
+          {:ok, any()} | {:error, any()}
+  def reduce(jobs, reducer_func, opts \\ [])
+      when is_function(reducer_func, 2) do
+    window_size = Keyword.get(opts, :window_size, 100)
+    timeout = Keyword.get(opts, :timeout, 60_000)
+
+    caller = self()
+
+    case DynamicSupervisor.start_child(
+           MapReduce.TaskManagerSupervisor,
+           {MapReduce.TaskManager, {caller, jobs, reducer_func, window_size}}
+         ) do
+      {:ok, manager_pid} ->
+        Process.link(manager_pid)
+
+        receive do
+          {:reduce_completed, result} ->
+            Process.unlink(manager_pid)
+            {:ok, result}
+
+          {:reduce_failed, reason} ->
+            Process.unlink(manager_pid)
+            {:error, reason}
+
+          {:EXIT, ^manager_pid, reason} ->
+            {:error, {:manager_died, reason}}
+        after
+          timeout ->
+            DynamicSupervisor.terminate_child(MapReduce.TaskManagerSupervisor, manager_pid)
+            {:error, :timeout}
+        end
+
+      {:error, reason} ->
+        {:error, {:failed_to_start_manager, reason}}
+    end
+  end
+
+  @doc """
+  Получает статистику пула воркеров
+  """
+  def pool_stats do
+    :poolboy.status(:worker_pool)
+  end
 end

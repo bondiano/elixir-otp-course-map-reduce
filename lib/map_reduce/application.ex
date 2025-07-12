@@ -3,29 +3,27 @@ defmodule MapReduce.Application do
   use Application
 
   @me __MODULE__
-  @worker_pool_name :map_reduce_pool
 
   @impl true
-  def start(_type, _args) do
+  def start(_, _) do
     children = [
-      MapReduce.TaskManager,
-      worker_pool_spec()
+      poolboy_spec(),
+      MapReduce.TaskManagerSupervisor
     ]
 
     Supervisor.start_link(children, strategy: :one_for_one, name: @me)
   end
 
-  def worker_pool_spec do
+  def poolboy_spec do
     cpus = :erlang.system_info(:logical_processors_available)
 
     poolboy_config = [
-      name: {:local, @worker_pool_name},
+      name: {:local, :worker_pool},
       worker_module: MapReduce.Worker,
       size: cpus,
-      max_overflow: cpus,
-      strategy: :fifo
+      max_overflow: cpus
     ]
 
-    :poolboy.child_spec(@worker_pool_name, poolboy_config)
+    :poolboy.child_spec(:worker_pool, poolboy_config, [])
   end
 end
