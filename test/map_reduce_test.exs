@@ -51,5 +51,36 @@ defmodule MapReduce.WorkerTest do
 
       assert result == {:error, %RuntimeError{message: "Test error"}}
     end
+
+    test "works with streams" do
+      stream = Stream.map(1..5, fn x -> fn -> x * x end end)
+      associative_func = fn a, b -> a + b end
+
+      result = MapReduce.reduce(stream, associative_func)
+
+      assert result == {:ok, 55}
+    end
+
+    test "works with infinite streams using window" do
+      infinite_stream =
+        Stream.iterate(1, &(&1 + 1))
+        |> Stream.take(20)
+        |> Stream.map(fn x -> fn -> x end end)
+
+      associative_func = fn a, b -> a + b end
+
+      result = MapReduce.reduce(infinite_stream, associative_func, window_size: 3)
+
+      assert result == {:ok, 210}
+    end
+
+    test "works with ranges" do
+      range_jobs = 1..4 |> Enum.map(fn x -> fn -> x * 2 end end)
+      associative_func = fn a, b -> a + b end
+
+      result = MapReduce.reduce(range_jobs, associative_func)
+
+      assert result == {:ok, 20}
+    end
   end
 end

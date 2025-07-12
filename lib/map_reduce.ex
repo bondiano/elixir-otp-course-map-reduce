@@ -6,7 +6,7 @@ defmodule MapReduce do
   @doc """
   Запускает несколько задач и применяет к результатам ассоциативную и коммутативную агрегатную функцию
   """
-  @spec reduce(Enum.t(), (any(), any() -> any()), Keyword.t()) ::
+  @spec reduce(Enumerable.t(), (any(), any() -> any()), Keyword.t()) ::
           {:ok, any()} | {:error, any()}
   def reduce(jobs, reducer_func, opts \\ [])
       when is_function(reducer_func, 2) do

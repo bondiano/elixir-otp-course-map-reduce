@@ -13,7 +13,8 @@ defmodule MapReduce.TaskManager do
     :result,
     :stop_on_error,
     :completed_results,
-    :next_job_index
+    :next_job_index,
+    :stream_state
   ]
 
   @type t :: %__MODULE__{
@@ -25,7 +26,8 @@ defmodule MapReduce.TaskManager do
           result: any(),
           stop_on_error: boolean(),
           completed_results: %{non_neg_integer() => any()},
-          next_job_index: non_neg_integer()
+          next_job_index: non_neg_integer(),
+          stream_state: {:halted, any()} | {:stream, any()}
         }
 
   @spec start_link(Keyword.t()) :: GenServer.on_start()
@@ -41,18 +43,25 @@ defmodule MapReduce.TaskManager do
     window_size = Keyword.fetch!(opts, :window_size)
     stop_on_error = Keyword.get(opts, :stop_on_error, false)
 
-    indexed_jobs = jobs |> Enum.to_list() |> Enum.with_index()
+    {stream_state, initial_jobs} =
+      if is_struct(jobs, Stream) do
+        fetch_jobs_from_stream(jobs, window_size * 2, 0)
+      else
+        indexed_jobs = jobs |> Enum.to_list() |> Enum.with_index()
+        {:halted, indexed_jobs}
+      end
 
     state = %__MODULE__{
       caller: caller,
       reducer_func: reducer_func,
       window_size: window_size,
-      waiting_jobs: indexed_jobs,
+      waiting_jobs: initial_jobs,
       active_workers: %{},
       stop_on_error: stop_on_error,
       result: nil,
       completed_results: %{},
-      next_job_index: 0
+      next_job_index: 0,
+      stream_state: stream_state
     }
 
     if Enum.empty?(state.waiting_jobs) do
@@ -156,13 +165,34 @@ defmodule MapReduce.TaskManager do
     if free_slots > 0 do
       {jobs_to_run, remaining_jobs} = Enum.split(state.waiting_jobs, free_slots)
 
+      {new_stream_state, final_waiting_jobs} =
+        case state.stream_state do
+          {:stream, remaining_stream} when length(remaining_jobs) < state.window_size ->
+            {stream_state, additional_jobs} =
+              fetch_jobs_from_stream(
+                remaining_stream,
+                state.window_size * 2,
+                get_next_available_index(remaining_jobs, state.completed_results)
+              )
+
+            {stream_state, remaining_jobs ++ additional_jobs}
+
+          _ ->
+            {state.stream_state, remaining_jobs}
+        end
+
       new_active_workers =
         Enum.reduce(jobs_to_run, state.active_workers, fn {job, index}, acc ->
           {req_id, worker} = start_job(job)
           Map.put(acc, req_id, {worker, index})
         end)
 
-      %__MODULE__{state | waiting_jobs: remaining_jobs, active_workers: new_active_workers}
+      %__MODULE__{
+        state
+        | waiting_jobs: final_waiting_jobs,
+          active_workers: new_active_workers,
+          stream_state: new_stream_state
+      }
     else
       state
     end
@@ -175,7 +205,53 @@ defmodule MapReduce.TaskManager do
   end
 
   defp finished?(state) do
-    state.waiting_jobs == [] and state.active_workers == %{}
+    state.waiting_jobs == [] and state.active_workers == %{} and
+      (state.stream_state == :halted or not match?({:stream, _}, state.stream_state))
+  end
+
+  defp fetch_jobs_from_stream(enumerable, _batch_size, start_index)
+       when is_function(enumerable) or is_list(enumerable) do
+    indexed_jobs = enumerable |> Enum.to_list() |> Enum.with_index(start_index)
+    {:halted, indexed_jobs}
+  end
+
+  defp fetch_jobs_from_stream(enumerable, batch_size, start_index) do
+    try do
+      case Enum.take(enumerable, batch_size) do
+        [] ->
+          {:halted, []}
+
+        jobs_batch ->
+          indexed_jobs = Enum.with_index(jobs_batch, start_index)
+          remaining_stream = Stream.drop(enumerable, batch_size)
+
+          case Enum.take(remaining_stream, 1) do
+            [] -> {:halted, indexed_jobs}
+            _ -> {{:stream, remaining_stream}, indexed_jobs}
+          end
+      end
+    rescue
+      _ ->
+        indexed_jobs = enumerable |> Enum.to_list() |> Enum.with_index(start_index)
+        {:halted, indexed_jobs}
+    end
+  end
+
+  defp get_next_available_index([], completed_results) do
+    case Map.keys(completed_results) do
+      [] -> 0
+      keys -> Enum.max(keys) + 1
+    end
+  end
+
+  defp get_next_available_index(waiting_jobs, completed_results) do
+    waiting_indices = Enum.map(waiting_jobs, fn {_job, index} -> index end)
+    completed_indices = Map.keys(completed_results)
+
+    case waiting_indices ++ completed_indices do
+      [] -> 0
+      indices -> Enum.max(indices) + 1
+    end
   end
 
   defp process_completed_results(completed_results, next_index, current_result, reducer_func) do
