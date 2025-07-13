@@ -23,7 +23,8 @@ defmodule MapReduce.MixProject do
       {:poolboy, "~> 1.5"},
       {:libring, "~> 1.0"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.0", only: [:dev], runtime: false}
+      {:dialyxir, "~> 1.0", only: [:dev], runtime: false},
+      {:local_cluster, "~> 2.1", only: [:test, :dev]}
     ]
   end
 end

@@ -26,4 +26,16 @@ defmodule MapReduce.Worker do
       :throw, value -> {:reply, {:error, {:throw, value}}, state}
     end
   end
+
+  def handle_call({:execute, {module, function, args}}, _from, state) do
+    try do
+      result = apply(module, function, args)
+      {:reply, {:ok, result}, state}
+    rescue
+      error -> {:reply, {:error, error}, state}
+    catch
+      :exit, reason -> {:reply, {:error, {:exit, reason}}, state}
+      :throw, value -> {:reply, {:error, {:throw, value}}, state}
+    end
+  end
 end

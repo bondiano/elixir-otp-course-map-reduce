@@ -61,6 +61,63 @@ defmodule MapReduce do
   end
 
   @doc """
+  Запускает распределенное выполнение задач на нескольких узлах
+  """
+  @spec distributed_reduce(Enumerable.t(), (any(), any() -> any()), Keyword.t()) ::
+          {:ok, any()} | {:error, any()}
+  def distributed_reduce(jobs, reducer_func, opts \\ [])
+      when is_function(reducer_func, 2) do
+    window_size = Keyword.get(opts, :window_size, 100)
+    timeout = Keyword.get(opts, :timeout, 60_000)
+    stop_on_error = Keyword.get(opts, :stop_on_error, false)
+
+    caller = self()
+
+    coordinator_spec = %{
+      id: MapReduce.DistributedCoordinator,
+      start:
+        {MapReduce.DistributedCoordinator, :start_link,
+         [
+           [
+             {:caller, caller},
+             {:jobs, jobs},
+             {:reducer_func, reducer_func},
+             {:window_size, window_size},
+             {:timeout, timeout},
+             {:stop_on_error, stop_on_error}
+           ]
+         ]},
+      restart: :temporary
+    }
+
+    case DynamicSupervisor.start_child(MapReduce.TaskManagerSupervisor, coordinator_spec) do
+      {:ok, coordinator_pid} ->
+        Process.flag(:trap_exit, true)
+        Process.link(coordinator_pid)
+
+        receive do
+          {:reduce_completed, result} ->
+            Process.unlink(coordinator_pid)
+            {:ok, result}
+
+          {:reduce_failed, reason} ->
+            Process.unlink(coordinator_pid)
+            {:error, reason}
+
+          {:EXIT, ^coordinator_pid, reason} ->
+            {:error, {:coordinator_died, reason}}
+        after
+          timeout ->
+            DynamicSupervisor.terminate_child(MapReduce.TaskManagerSupervisor, coordinator_pid)
+            {:error, :timeout}
+        end
+
+      {:error, reason} ->
+        {:error, {:failed_to_start_coordinator, reason}}
+    end
+  end
+
+  @doc """
   Получает статистику пула воркеров
   """
   def pool_stats do
